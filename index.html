@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  
+
+  
+  <title>HJaycee&#39;s Blog</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <meta property="og:type" content="website">
+<meta property="og:title" content="HJaycee&#39;s Blog">
+<meta property="og:url" content="http://yoursite.com/index.html">
+<meta property="og:site_name" content="HJaycee&#39;s Blog">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="HJaycee&#39;s Blog">
+  
+    <link rel="alternate" href="/atom.xml" title="HJaycee&#39;s Blog" type="application/atom+xml">
+  
+  
+    <link rel="icon" href="/favicon.png">
+  
+  
+    <link href="//fonts.googleapis.com/css?family=Source+Code+Pro" rel="stylesheet" type="text/css">
+  
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+
+<body>
+  <div id="container">
+    <div id="wrap">
+      <header id="header">
+  <div id="banner"></div>
+  <div id="header-outer" class="outer">
+    <div id="header-title" class="inner">
+      <h1 id="logo-wrap">
+        <a href="/" id="logo">HJaycee&#39;s Blog</a>
+      </h1>
+      
+    </div>
+    <div id="header-inner" class="inner">
+      <nav id="main-nav">
+        <a id="main-nav-toggle" class="nav-icon"></a>
+        
+          <a class="main-nav-link" href="/">Home</a>
+        
+          <a class="main-nav-link" href="/archives">Archives</a>
+        
+      </nav>
+      <nav id="sub-nav">
+        
+          <a id="nav-rss-link" class="nav-icon" href="/atom.xml" title="RSS Feed"></a>
+        
+        <a id="nav-search-btn" class="nav-icon" title="Suche"></a>
+      </nav>
+      <div id="search-form-wrap">
+        <form action="//google.com/search" method="get" accept-charset="UTF-8" class="search-form"><input type="search" name="q" class="search-form-input" placeholder="Search"><button type="submit" class="search-form-submit">&#xF002;</button><input type="hidden" name="sitesearch" value="http://yoursite.com"></form>
+      </div>
+    </div>
+  </div>
+</header>
+      <div class="outer">
+        <section id="main">
+  
+    <article id="post-记一次BUG的深入探究" class="article article-type-post" itemscope itemprop="blogPost">
+  <div class="article-meta">
+    <a href="/2018/04/26/记一次BUG的深入探究/" class="article-date">
+  <time datetime="2018-04-26T05:28:07.000Z" itemprop="datePublished">2018-04-26</time>
+</a>
+    
+  </div>
+  <div class="article-inner">
+    
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2018/04/26/记一次BUG的深入探究/">记一次BUG的深入探究</a>
+    </h1>
+  
+
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <p><strong>在公司项目中发现一个很奇怪的问题：</strong></p>
+<blockquote>
+<ul>
+<li>问题：点击任意一个H5中的视频会打开全屏的系统播放器，但是不管怎么点击屏幕，播放器的功能按钮都没办法呼出。</li>
+<li>初步定位：原来是由我写的一个<code>-[UIViewController presentViewController:animated:completion:]</code>的钩子引起的。因为我为了让启动页启动过程不受到控制器modal的干扰，用一个锁把modal操作阻塞住。注释这个钩子问题就会得到解决。</li>
+</ul>
+</blockquote>
+<p><strong>虽然解决了问题，但是真正的原因还没有找到，所以还是继续深挖下去。</strong></p>
+<p><strong>钩子代码如下：</strong><br><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">// 通过runtime替换原present方法</span><br><span class="line">- (void)new_presentViewController:(UIViewController *)viewControllerToPresent animated:(BOOL)flag completion:(void (^)(void))completion &#123;</span><br><span class="line">    dispatch_async([KSLaunchLock shareLock].launch_queue, ^&#123;</span><br><span class="line">        [[KSLaunchLock shareLock] lock]; // 锁</span><br><span class="line">        [[KSLaunchLock shareLock] destroy];</span><br><span class="line">        dispatch_async(dispatch_get_main_queue(), ^&#123;</span><br><span class="line">            [self new_presentViewController:viewControllerToPresent animated:flag completion:completion];</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;);</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure></p>
+<blockquote>
+<p>可是当我把与锁有关的代码注释掉后，发现问题依然存在，说明这个问题<code>与锁无关</code>。</p>
+</blockquote>
+<p><strong>也就是，像这样去打开系统播放器会导致无法呼出功能按钮。</strong><br><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">dispatch_async(dispatch_get_global_queue(0, 0), ^&#123;</span><br><span class="line">    dispatch_async(dispatch_get_main_queue(), ^&#123;</span><br><span class="line">        [self presentViewController:vc animated:YES completion:nil];</span><br><span class="line">    &#125;);</span><br><span class="line">&#125;);</span><br></pre></td></tr></table></figure></p>
+<p><strong>为什么直接<code>present</code>没有问题，而在从子线程回到主线程再调用<code>present</code>就会出现问题？</strong></p>
+<p><strong>带着问题继续研究，通过界面断点找到播放器的类是<code>AVFullScreenViewController</code></strong></p>
+<p><img src="http://github-1252137158.file.myqcloud.com/WX20180426-123407%402x.png" alt=""></p>
+<p>打开终端使用<code>sudo find / -name AVKit | grep 11.</code>先找到AVKit二进程文件的位置</p>
+<p>使用<code>Hopper</code>反编译AVKit，搜索<code>AVFullScreenViewController</code>发现它的构造方法<code>-[AVFullScreenViewController initWithDelegate:presentingViewController:sourceView:]</code>，继续找下去，可以看到该方法是在<code>-[AVPlayerViewController _transitionToFullScreenAnimated:interactive:completionHandler:]</code>方法中被调用的。</p>
+<p>分析<code>-[AVPlayerViewController _transitionToFullScreenAnimated:interactive:completionHandler:]</code>内部的伪代码。</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br></pre></td><td class="code"><pre><span class="line">// 为方便阅读去除了无用代码</span><br><span class="line">void -[AVPlayerViewController _transitionToFullScreenAnimated:interactive:completionHandler:](void * self, void * _cmd, bool arg2, bool arg3, void * arg4) &#123;</span><br><span class="line">    r13 = [AVFullScreenViewController alloc];</span><br><span class="line">    r14 = [[r15 view] retain];</span><br><span class="line">    r8 = r14;</span><br><span class="line">    r13 = [r13 initWithDelegate:r15 presentingViewController:var_50 sourceView:r8];</span><br><span class="line">    [r14 release];</span><br><span class="line">    r12 = [[r15 fullScreenViewController] retain];</span><br><span class="line">    r14 = [[r12 transitionCoordinator] retain];</span><br><span class="line">    [r14 animateAlongsideTransition:0x0 completion:var_F0];</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>可以看到在<code>present</code>之后调用了<code>[r14 animateAlongsideTransition:0x0 completion:var_F0];</code>，方法的调用者r14是<code>[AVFullScreenViewController transitionCoordinator]</code>，推测UI显示代码是在<code>[r14 animateAlongsideTransition:0x0 completion:var_F0];</code>中实现的。</p>
+<p>怀疑<code>[AVFullScreenViewController transitionCoordinator]</code>在那个时候没有拿到，所以方法没有调用成功。</p>
+<p><strong>使用lldb下断点</strong><br><figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">br s -r &apos;\[* transitionCoordinator]$&apos;</span><br></pre></td></tr></table></figure></p>
+<p>断点进来，果然<code>[AVFullScreenViewController transitionCoordinator]</code>是<code>nil</code></p>
+<p><img src="http://github-1252137158.file.myqcloud.com/WX20180426-123528%402x.png" alt=""><br><img src="http://github-1252137158.file.myqcloud.com/WX20180426-123647%402x.png" alt=""><br><img src="http://github-1252137158.file.myqcloud.com/WX20180426-123706%402x.png" alt=""></p>
+<p>注释钩子代码再下断点进来，这个时候<code>[AVFullScreenViewController transitionCoordinator]</code>有值了</p>
+<p><img src="http://github-1252137158.file.myqcloud.com/sdasfd.png" alt=""></p>
+<p>再到<code>Hopper</code>里查看<code>-[UIViewController transitionCoordinator]</code>的伪代码</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br><span class="line">46</span><br><span class="line">47</span><br><span class="line">48</span><br><span class="line">49</span><br><span class="line">50</span><br><span class="line">51</span><br><span class="line">52</span><br><span class="line">53</span><br><span class="line">54</span><br><span class="line">55</span><br><span class="line">56</span><br><span class="line">57</span><br><span class="line">58</span><br><span class="line">59</span><br><span class="line">60</span><br><span class="line">61</span><br><span class="line">62</span><br><span class="line">63</span><br><span class="line">64</span><br><span class="line">65</span><br><span class="line">66</span><br><span class="line">67</span><br><span class="line">68</span><br><span class="line">69</span><br><span class="line">70</span><br><span class="line">71</span><br><span class="line">72</span><br><span class="line">73</span><br><span class="line">74</span><br><span class="line">75</span><br><span class="line">76</span><br></pre></td><td class="code"><pre><span class="line">void * -[UIViewController _transitionCoordinator](void * self, void * _cmd) &#123;</span><br><span class="line">    r14 = self;</span><br><span class="line">    if (__UIAppUseModernRotationAndPresentationBehaviors(self, _cmd) == 0x0) goto loc_1464ae;</span><br><span class="line"></span><br><span class="line">loc_1463f7:</span><br><span class="line">    rbx = ___42-[UIViewController _transitionCoordinator]_block_invoke(^ &#123; /* block implemented at ___42-[UIViewController _transitionCoordinator]_block_invoke */ &#125;, r14);</span><br><span class="line">    if (rbx != 0x0) goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_146415:</span><br><span class="line">    rbx = ___42-[UIViewController _transitionCoordinator]_block_invoke_2(__NSConcreteStackBlock, r14);</span><br><span class="line">    _Block_object_dispose(0x0, 0x8);</span><br><span class="line">    if (rbx != 0x0) goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_1464ae:</span><br><span class="line">    if ([r14 parentViewController] == 0x0) goto loc_146511;</span><br><span class="line"></span><br><span class="line">loc_146508:</span><br><span class="line">    rsi = @selector(parentViewController);</span><br><span class="line">    goto loc_14652d;</span><br><span class="line"></span><br><span class="line">loc_14652d:</span><br><span class="line">    rax = _objc_msgSend(r14, rsi);</span><br><span class="line">    rax = ___42-[UIViewController _transitionCoordinator]_block_invoke1418(__NSConcreteStackBlock, rax);</span><br><span class="line">    goto loc_146546;</span><br><span class="line"></span><br><span class="line">loc_146546:</span><br><span class="line">    rbx = rax;</span><br><span class="line">    goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_146549:</span><br><span class="line">    rax = rbx;</span><br><span class="line">    return rax;</span><br><span class="line"></span><br><span class="line">loc_146511:</span><br><span class="line">    if ([r14 presentingViewController] == 0x0) goto loc_14655a;</span><br><span class="line"></span><br><span class="line">loc_146526:</span><br><span class="line">    rsi = @selector(presentingViewController);</span><br><span class="line">    goto loc_14652d;</span><br><span class="line"></span><br><span class="line">loc_14655a:</span><br><span class="line">    rbx = 0x0;</span><br><span class="line">    if (__UIAppUseModernRotationAndPresentationBehaviors() != 0x0) goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_146567:</span><br><span class="line">    rax = [r14 _existingView];</span><br><span class="line">    rax = [rax window];</span><br><span class="line">    if (rax != 0x0) goto loc_1465f4;</span><br><span class="line"></span><br><span class="line">loc_14658d:</span><br><span class="line">    if ([r14 presentedViewController] == 0x0) goto loc_1465ab;</span><br><span class="line"></span><br><span class="line">loc_1465a2:</span><br><span class="line">    rsi = @selector(presentedViewController);</span><br><span class="line">    goto loc_1465c9;</span><br><span class="line"></span><br><span class="line">loc_1465c9:</span><br><span class="line">    rax = _objc_msgSend(r14, rsi);</span><br><span class="line">    rax = [rax _existingView];</span><br><span class="line">    rax = [rax window];</span><br><span class="line">    rbx = 0x0;</span><br><span class="line">    if (rax == 0x0) goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_1465f4:</span><br><span class="line">    rax = [UIWindowController windowControllerForWindow:rax];</span><br><span class="line">    rax = [r14 _transitionCoordinatorForWindowController:rax];</span><br><span class="line">    goto loc_146546;</span><br><span class="line"></span><br><span class="line">loc_1465ab:</span><br><span class="line">    rbx = 0x0;</span><br><span class="line">    if ([r14 presentingViewController] == 0x0) goto loc_146549;</span><br><span class="line"></span><br><span class="line">loc_1465c2:</span><br><span class="line">    rsi = @selector(presentingViewController);</span><br><span class="line">    goto loc_1465c9;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+<p>内部会去判断<code>UIViewController</code>的<code>presentingViewController</code>，如果是空就返回nil</p>
+<p><img src="http://github-1252137158.file.myqcloud.com/asffsf.png" alt=""></p>
+<h2 id="结论"><a href="#结论" class="headerlink" title="结论"></a>结论</h2><p><code>present</code>方法被hook并改成了异步操作，所以后面的<code>[UIViewController transitionCoordinator]</code>内部拿不到<code>[UIViewController presentingViewController]</code>，也就导致后续的方法调用失败。</p>
+<p><strong>解决办法：</strong></p>
+<p>如果启动页消失也就是锁的时间过了，就直接调用<code>present</code>方法</p>
+<figure class="highlight plain"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line">- (void)new_presentViewController:(UIViewController *)viewControllerToPresent animated:(BOOL)flag completion:(void (^)(void))completion &#123;</span><br><span class="line">    if (![KSLaunchLock shareLock].isLock) &#123;</span><br><span class="line">        [self new_presentViewController:viewControllerToPresent animated:flag completion:completion];</span><br><span class="line">    &#125; else &#123;</span><br><span class="line">        dispatch_async([KSLaunchLock shareLock].launch_queue, ^&#123;</span><br><span class="line">            [[KSLaunchLock shareLock] lock];</span><br><span class="line">            [[KSLaunchLock shareLock] destroy];</span><br><span class="line">            dispatch_async(dispatch_get_main_queue(), ^&#123;</span><br><span class="line">                [self new_presentViewController:viewControllerToPresent animated:flag completion:completion];</span><br><span class="line">            &#125;);</span><br><span class="line">        &#125;);</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+      
+    </div>
+    <footer class="article-footer">
+      <a data-url="http://yoursite.com/2018/04/26/记一次BUG的深入探究/" data-id="cjgg4xqbb0001hjge27bk68oz" class="article-share-link">Teilen</a>
+      
+      
+    </footer>
+  </div>
+  
+</article>
+
+
+  
+    <article id="post-第一篇文章" class="article article-type-post" itemscope itemprop="blogPost">
+  <div class="article-meta">
+    <a href="/2018/03/12/第一篇文章/" class="article-date">
+  <time datetime="2018-03-12T02:28:56.000Z" itemprop="datePublished">2018-03-12</time>
+</a>
+    
+  </div>
+  <div class="article-inner">
+    
+    
+      <header class="article-header">
+        
+  
+    <h1 itemprop="name">
+      <a class="article-title" href="/2018/03/12/第一篇文章/">第一篇文章</a>
+    </h1>
+  
+
+      </header>
+    
+    <div class="article-entry" itemprop="articleBody">
+      
+        <p>之前的博客地址：</p>
+<p><a href="https://www.jianshu.com/u/8bde69945e50" target="_blank" rel="noopener">HJaycee</a></p>
+
+      
+    </div>
+    <footer class="article-footer">
+      <a data-url="http://yoursite.com/2018/03/12/第一篇文章/" data-id="cjgg4xqb50000hjgeijtcco04" class="article-share-link">Teilen</a>
+      
+      
+    </footer>
+  </div>
+  
+</article>
+
+
+  
+
+
+</section>
+        
+          <aside id="sidebar">
+  
+    
+
+  
+    
+
+  
+    
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">Archiv</h3>
+    <div class="widget">
+      <ul class="archive-list"><li class="archive-list-item"><a class="archive-list-link" href="/archives/2018/04/">April 2018</a></li><li class="archive-list-item"><a class="archive-list-link" href="/archives/2018/03/">March 2018</a></li></ul>
+    </div>
+  </div>
+
+
+  
+    
+  <div class="widget-wrap">
+    <h3 class="widget-title">letzter Beitrag</h3>
+    <div class="widget">
+      <ul>
+        
+          <li>
+            <a href="/2018/04/26/记一次BUG的深入探究/">记一次BUG的深入探究</a>
+          </li>
+        
+          <li>
+            <a href="/2018/03/12/第一篇文章/">第一篇文章</a>
+          </li>
+        
+      </ul>
+    </div>
+  </div>
+
+  
+</aside>
+        
+      </div>
+      <footer id="footer">
+  
+  <div class="outer">
+    <div id="footer-info" class="inner">
+      &copy; 2018 HJaycee<br>
+      Powered by <a href="http://hexo.io/" target="_blank">Hexo</a>
+    </div>
+  </div>
+</footer>
+    </div>
+    <nav id="mobile-nav">
+  
+    <a href="/" class="mobile-nav-link">Home</a>
+  
+    <a href="/archives" class="mobile-nav-link">Archives</a>
+  
+</nav>
+    
+
+<script src="//ajax.googleapis.com/ajax/libs/jquery/2.0.3/jquery.min.js"></script>
+
+
+  <link rel="stylesheet" href="/fancybox/jquery.fancybox.css">
+  <script src="/fancybox/jquery.fancybox.pack.js"></script>
+
+
+<script src="/js/script.js"></script>
+
+
+
+  </div>
+</body>
+</html>
